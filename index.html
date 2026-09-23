@@ -211,6 +211,7 @@ let micMuted = false;
 let frameTimer = null;
 let playCtx = null, nextPlayTime = 0;
 let setupDone = false;
+let minimalMode = false;
 
 const SYSTEM_PROMPT_BASE = `You are a hands-on mechanic's assistant, speaking with someone who is actively working on their vehicle and looking at it through a camera mounted on their head. You cannot touch anything yourself — you only see what they show you and hear what they say.
 
@@ -255,12 +256,17 @@ async function startSession(){
     const setupMsg = {
       setup: {
         model: `models/${model}`,
-        responseModalities: ['AUDIO'],
-        systemInstruction: { parts: [{ text: buildSystemPrompt() }] },
-        inputAudioTranscription: {},
-        outputAudioTranscription: {}
+        generationConfig: {
+          responseModalities: ['AUDIO']
+        },
+        systemInstruction: { parts: [{ text: buildSystemPrompt() }] }
       }
     };
+    if(!minimalMode){
+      setupMsg.setup.inputAudioTranscription = {};
+      setupMsg.setup.outputAudioTranscription = {};
+    }
+    log('sys','Sending setup for ' + model + '…');
     ws.send(JSON.stringify(setupMsg));
   };
 
@@ -311,7 +317,15 @@ async function startSession(){
     log('sys', `Socket closed — code ${ev.code}${ev.reason ? ', reason: ' + ev.reason : ', no reason given'}`);
     if(!setupDone){
       if(ev.code === 1006) log('sys','Code 1006 usually means the connection never completed — bad API key, blocked network, or the page is not served over https.');
-      if(ev.code === 1007 || ev.code === 1008) log('sys','That code usually means the setup message was rejected — check the model name.');
+      if(ev.code === 1007 || ev.code === 1008){
+        log('sys','The server rejected the setup message.');
+        if(!minimalMode){
+          minimalMode = true;
+          log('sys','Retrying with a stripped-down setup (no transcription fields)…');
+          setTimeout(startSession, 500);
+          return;
+        }
+      }
     }
     stopSessionLocal();
   };
