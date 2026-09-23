@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Vision Mechanic — Guided Diagnosis</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --border:#30363d; --text:#e6edf3; --muted:#8b949e;
+    --accent:#3fb950; --accent2:#58a6ff; --danger:#f85149; --warn:#d29922;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    height:100%; overflow:hidden;}
+  #app{display:flex;flex-direction:column;height:100vh;height:100dvh;}
+  header{padding:10px 14px;border-bottom:1px solid var(--border);display:flex;
+    align-items:center;justify-content:space-between;flex-shrink:0;background:var(--panel);}
+  header h1{font-size:15px;margin:0;font-weight:600;}
+  #status{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px;}
+  #statusDot{width:8px;height:8px;border-radius:50%;background:var(--danger);display:inline-block;}
+  #statusDot.connecting{background:var(--warn);}
+  #statusDot.live{background:var(--accent);box-shadow:0 0 6px var(--accent);}
+
+  #videoWrap{position:relative;flex:1;min-height:0;background:#000;display:flex;align-items:center;justify-content:center;}
+  video{width:100%;height:100%;object-fit:cover;}
+  #camSwitch{position:absolute;top:10px;right:10px;background:rgba(0,0,0,.55);border:1px solid var(--border);
+    color:var(--text);border-radius:8px;padding:8px 10px;font-size:12px;}
+  #listenBadge{position:absolute;bottom:10px;left:10px;background:rgba(0,0,0,.55);border:1px solid var(--border);
+    color:var(--muted);border-radius:8px;padding:6px 10px;font-size:11px;display:flex;align-items:center;gap:6px;}
+  #listenBadge.hot{color:var(--accent);}
+  #listenBadge .mic{width:6px;height:6px;border-radius:50%;background:var(--muted);}
+  #listenBadge.hot .mic{background:var(--accent);}
+
+  #transcript{max-height:34%;overflow-y:auto;padding:8px 12px;border-top:1px solid var(--border);
+    background:var(--panel);font-size:13px;line-height:1.4;flex-shrink:0;}
+  #transcript .line{margin-bottom:6px;}
+  #transcript .you{color:var(--accent2);}
+  #transcript .ai{color:var(--text);}
+  #transcript .sys{color:var(--muted);font-style:italic;}
+  #transcript .label{font-weight:600;margin-right:4px;}
+
+  #controls{padding:10px 12px calc(10px + env(safe-area-inset-bottom));border-top:1px solid var(--border);
+    background:var(--panel);flex-shrink:0;display:flex;flex-direction:column;gap:8px;}
+  #row1{display:flex;gap:8px;}
+  button{border:none;border-radius:10px;padding:12px 14px;font-size:14px;font-weight:600;
+    cursor:pointer;flex:1;}
+  #connectBtn{background:var(--accent);color:#03170a;}
+  #connectBtn.stop{background:var(--danger);color:#1a0000;}
+  #muteBtn{background:#21262d;color:var(--text);border:1px solid var(--border);flex:0 0 auto;width:52px;}
+  #muteBtn.muted{background:var(--danger);color:#fff;}
+  #settingsBtn{background:#21262d;color:var(--text);border:1px solid var(--border);flex:0 0 auto;width:52px;}
+
+  #settingsPanel{display:none;padding:10px 12px;border-top:1px solid var(--border);background:var(--panel);
+    max-height:60vh;overflow-y:auto;}
+  #settingsPanel.open{display:block;}
+  #settingsPanel label{display:block;font-size:12px;color:var(--muted);margin:10px 0 4px;}
+  #settingsPanel input[type=text],#settingsPanel input[type=password],#settingsPanel textarea{
+    width:100%;background:#0d1117;border:1px solid var(--border);color:var(--text);
+    border-radius:8px;padding:9px;font-size:13px;font-family:inherit;}
+  #settingsPanel textarea{min-height:90px;resize:vertical;}
+  #settingsPanel .hint{font-size:11px;color:var(--muted);margin-top:4px;}
+  #settingsPanel .saveRow{margin-top:12px;display:flex;gap:8px;}
+  #settingsPanel .saveRow button{padding:10px;}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>🔧 Vision Mechanic</h1>
+    <div id="status"><span id="statusDot"></span><span id="statusText">Not connected</span></div>
+  </header>
+
+  <div id="videoWrap">
+    <video id="video" autoplay playsinline muted></video>
+    <button id="camSwitch">Flip camera</button>
+    <div id="listenBadge"><span class="mic"></span><span id="listenText">mic off</span></div>
+  </div>
+
+  <div id="transcript"></div>
+
+  <div id="controls">
+    <div id="row1">
+      <button id="settingsBtn">⚙</button>
+      <button id="connectBtn">Start Session</button>
+      <button id="muteBtn">🎤</button>
+    </div>
+  </div>
+
+  <div id="settingsPanel">
+    <label>Gemini API key (kept only in this browser)</label>
+    <input type="password" id="apiKey" placeholder="AIza...">
+    <div class="hint">Get a key at aistudio.google.com/apikey. This app calls the Gemini Live API directly from your browser — fine for personal testing, not for sharing with others, since anyone with the page could see the key you enter.</div>
+
+    <label>Model</label>
+    <input type="text" id="modelName" value="gemini-3.8-live">
+    <div class="hint">If this model name stops working, check ai.google.dev/gemini-api/docs/live-api for the current live model name.</div>
+
+    <label>What are you working on? (sets the assistant's focus)</label>
+    <textarea id="taskDesc" placeholder="e.g. 2019 Ski-Doo snowmobile, engine overheats when idling but seems fine under load">2019 Ski-Doo snowmobile, engine overheats when idling but seems fine while moving/under load.</textarea>
+
+    <div class="saveRow">
+      <button id="testKey" style="background:#21262d;color:var(--text);border:1px solid var(--border);">Test key</button>
+      <button id="saveSettings" style="background:var(--accent2);color:#001126;">Save & Close</button>
+    </div>
+    <div class="hint" id="envInfo"></div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const video = $('video');
+const statusDot = $('statusDot');
+const statusText = $('statusText');
+const transcript = $('transcript');
+const connectBtn = $('connectBtn');
+const muteBtn = $('muteBtn');
+const settingsBtn = $('settingsBtn');
+const settingsPanel = $('settingsPanel');
+const saveSettings = $('saveSettings');
+const camSwitchBtn = $('camSwitch');
+const listenBadge = $('listenBadge');
+const listenText = $('listenText');
+
+// ---- persisted settings ----
+function loadSettings(){
+  $('apiKey').value = localStorage.getItem('vm_apiKey') || '';
+  $('modelName').value = localStorage.getItem('vm_model') || 'gemini-3.8-live';
+  $('taskDesc').value = localStorage.getItem('vm_task') || $('taskDesc').value;
+}
+loadSettings();
+saveSettings.onclick = () => {
+  localStorage.setItem('vm_apiKey', $('apiKey').value.trim());
+  localStorage.setItem('vm_model', $('modelName').value.trim());
+  localStorage.setItem('vm_task', $('taskDesc').value.trim());
+  settingsPanel.classList.remove('open');
+};
+settingsBtn.onclick = () => settingsPanel.classList.toggle('open');
+
+// ---- environment check ----
+(function envCheck(){
+  const secure = window.isSecureContext;
+  const proto = location.protocol;
+  $('envInfo').textContent = `Page: ${proto}//${location.host || '(local file)'} — secure context: ${secure ? 'yes' : 'NO'}`;
+  if(!secure){
+    setTimeout(()=>log('sys','⚠ This page is not running in a secure context (needs https:// or localhost). Camera, microphone, and the API connection may all be blocked. See the note about hosting below.'),300);
+  }
+})();
+
+// ---- API key tester (plain REST call, separate from the live socket) ----
+$('testKey').onclick = async () => {
+  const key = $('apiKey').value.trim();
+  if(!key){ log('sys','No API key entered.'); return; }
+  log('sys','Testing key…');
+  try{
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(key)}`);
+    const j = await r.json();
+    if(!r.ok){
+      log('sys',`✗ Key rejected (HTTP ${r.status}): ${j.error ? j.error.message : 'unknown error'}`);
+      return;
+    }
+    const names = (j.models||[]).map(m=>m.name.replace('models/',''));
+    const live = names.filter(n=>n.includes('live'));
+    log('sys',`✓ Key works. ${names.length} models visible.`);
+    log('sys', live.length ? `Live models available to you: ${live.join(', ')}` : '⚠ No "live" models visible on this key — the Live API may not be enabled for this project.');
+  }catch(e){
+    log('sys',`✗ Network error reaching Google: ${e.message}. If you opened this as a local file, that is the likely cause.`);
+  }
+};
+
+function log(role, text){
+  const div = document.createElement('div');
+  div.className = 'line ' + role;
+  const label = role === 'you' ? 'You: ' : role === 'ai' ? 'Assistant: ' : '';
+  div.innerHTML = `<span class="label">${label}</span>${text}`;
+  transcript.appendChild(div);
+  transcript.scrollTop = transcript.scrollHeight;
+}
+
+function setStatus(state, text){
+  statusDot.className = state;
+  statusText.textContent = text;
+}
+
+// ---- camera ----
+let currentStream = null;
+let facingMode = 'environment';
+async function startCamera(){
+  if(currentStream) currentStream.getTracks().forEach(t=>t.stop());
+  try{
+    currentStream = await navigator.mediaDevices.getUserMedia({
+      video:{ facingMode, width:{ideal:960}, height:{ideal:720} },
+      audio:false
+    });
+  }catch(e){
+    currentStream = await navigator.mediaDevices.getUserMedia({video:true, audio:false});
+  }
+  video.srcObject = currentStream;
+}
+camSwitchBtn.onclick = () => {
+  facingMode = facingMode === 'environment' ? 'user' : 'environment';
+  if(sessionActive) startCamera();
+};
+startCamera();
+
+// ---- Gemini Live session state ----
+let ws = null;
+let sessionActive = false;
+let micStream = null, audioCtx = null, micSource = null, micProcessor = null;
+let micMuted = false;
+let frameTimer = null;
+let playCtx = null, nextPlayTime = 0;
+let setupDone = false;
+
+const SYSTEM_PROMPT_BASE = `You are a hands-on mechanic's assistant, speaking with someone who is actively working on their vehicle and looking at it through a camera mounted on their head. You cannot touch anything yourself — you only see what they show you and hear what they say.
+
+How to behave:
+- Work through diagnosis step by step, one check at a time. Don't dump a long checklist at once.
+- When you need to see something specific, ask for it clearly: "point the camera at the coolant reservoir cap" rather than vague requests.
+- React to what you actually see in the video. If something looks wrong, damaged, or abnormal, say so specifically and explain why it matters.
+- If the image is unclear, blurry, too dark, or you're not confident what you're looking at, say so and ask them to reposition, get closer, or add light — never guess and present it as certain.
+- Keep responses short and conversational, like a mentor standing next to them — this is spoken aloud, not read.
+- Always flag safety issues before diagnostic ones: hot surfaces, moving belts/fans, pressurized cooling systems, fuel, electrical hazards. Tell them to let the engine cool or shut it off when a check requires it.
+- If a problem is beyond safe DIY repair (e.g. major engine internals, safety-critical brake/fuel system failures), say so plainly and recommend a qualified shop.
+- You are giving guidance based on general mechanical knowledge, not a certified diagnosis — remind them of this if they're about to do something risky or irreversible.
+
+Current job: `;
+
+function buildSystemPrompt(){
+  const task = $('taskDesc').value.trim() || 'General vehicle troubleshooting.';
+  return SYSTEM_PROMPT_BASE + task;
+}
+
+function wsUrl(){
+  const key = $('apiKey').value.trim();
+  const model = $('modelName').value.trim() || 'gemini-3.8-live';
+  return {
+    url: `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${encodeURIComponent(key)}`,
+    model
+  };
+}
+
+async function startSession(){
+  const key = $('apiKey').value.trim();
+  if(!key){
+    settingsPanel.classList.add('open');
+    alert('Enter your Gemini API key first (gear icon).');
+    return;
+  }
+  setStatus('connecting','Connecting…');
+  const {url, model} = wsUrl();
+  ws = new WebSocket(url);
+
+  ws.onopen = () => {
+    const setupMsg = {
+      setup: {
+        model: `models/${model}`,
+        responseModalities: ['AUDIO'],
+        systemInstruction: { parts: [{ text: buildSystemPrompt() }] },
+        inputAudioTranscription: {},
+        outputAudioTranscription: {}
+      }
+    };
+    ws.send(JSON.stringify(setupMsg));
+  };
+
+  ws.onmessage = async (event) => {
+    let data = event.data;
+    if(data instanceof Blob){ data = await data.text(); }
+    let msg;
+    try{ msg = JSON.parse(data); } catch(e){ return; }
+
+    if(msg.setupComplete){
+      setupDone = true;
+      setStatus('live','Live');
+      log('sys','Session started. Speak, or show something to the camera.');
+      startMic();
+      startFrameLoop();
+      return;
+    }
+
+    if(msg.serverContent){
+      const sc = msg.serverContent;
+      if(sc.modelTurn && sc.modelTurn.parts){
+        for(const part of sc.modelTurn.parts){
+          if(part.inlineData && part.inlineData.data){
+            playAudioChunk(part.inlineData.data);
+          }
+        }
+      }
+      if(sc.inputTranscription && sc.inputTranscription.text){
+        log('you', sc.inputTranscription.text);
+      }
+      if(sc.outputTranscription && sc.outputTranscription.text){
+        log('ai', sc.outputTranscription.text);
+      }
+      if(sc.interrupted){
+        // model was interrupted by user barge-in; stop queued playback
+        nextPlayTime = 0;
+      }
+    }
+  };
+
+  ws.onerror = () => {
+    setStatus('','Error');
+    log('sys','WebSocket error — see close reason below for detail.');
+  };
+
+  ws.onclose = (ev) => {
+    setStatus('','Disconnected');
+    log('sys', `Socket closed — code ${ev.code}${ev.reason ? ', reason: ' + ev.reason : ', no reason given'}`);
+    if(!setupDone){
+      if(ev.code === 1006) log('sys','Code 1006 usually means the connection never completed — bad API key, blocked network, or the page is not served over https.');
+      if(ev.code === 1007 || ev.code === 1008) log('sys','That code usually means the setup message was rejected — check the model name.');
+    }
+    stopSessionLocal();
+  };
+
+  // if setup never completes, say so instead of spinning forever
+  setTimeout(() => {
+    if(sessionActive && !setupDone){
+      log('sys','Still no response after 10s. Socket state: ' + (ws ? ws.readyState : 'none') + ' (0=connecting, 1=open, 2=closing, 3=closed). Try "Test key" in settings.');
+    }
+  }, 10000);
+
+  sessionActive = true;
+  connectBtn.textContent = 'End Session';
+  connectBtn.classList.add('stop');
+}
+
+function stopSessionLocal(){
+  sessionActive = false;
+  setupDone = false;
+  connectBtn.textContent = 'Start Session';
+  connectBtn.classList.remove('stop');
+  stopMic();
+  stopFrameLoop();
+}
+
+function endSession(){
+  if(ws){ try{ ws.close(); }catch(e){} ws = null; }
+  stopSessionLocal();
+  setStatus('','Not connected');
+}
+
+connectBtn.onclick = () => {
+  if(sessionActive){ endSession(); }
+  else { startSession(); }
+};
+
+// ---- mic capture: raw PCM16 @16kHz ----
+function startMic(){
+  navigator.mediaDevices.getUserMedia({audio:{channelCount:1, echoCancellation:true, noiseSuppression:true}})
+    .then(stream => {
+      micStream = stream;
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      micSource = audioCtx.createMediaStreamSource(stream);
+      micProcessor = audioCtx.createScriptProcessor(4096, 1, 1);
+      const targetRate = 16000;
+      micProcessor.onaudioprocess = (e) => {
+        if(!sessionActive || micMuted || !ws || ws.readyState !== WebSocket.OPEN) return;
+        const input = e.inputBuffer.getChannelData(0);
+        const resampled = resampleTo16k(input, audioCtx.sampleRate, targetRate);
+        const pcm16 = floatTo16BitPCM(resampled);
+        const b64 = arrayBufferToBase64(pcm16.buffer);
+        ws.send(JSON.stringify({
+          realtimeInput: { audio: { data: b64, mimeType: 'audio/pcm;rate=16000' } }
+        }));
+      };
+      micSource.connect(micProcessor);
+      micProcessor.connect(audioCtx.destination);
+      listenBadge.classList.add('hot');
+      listenText.textContent = 'listening';
+    })
+    .catch(e => { log('sys','Microphone permission denied — voice input disabled.'); });
+}
+function stopMic(){
+  if(micProcessor){ micProcessor.disconnect(); micProcessor.onaudioprocess = null; micProcessor = null; }
+  if(micSource){ micSource.disconnect(); micSource = null; }
+  if(micStream){ micStream.getTracks().forEach(t=>t.stop()); micStream = null; }
+  if(audioCtx){ audioCtx.close(); audioCtx = null; }
+  listenBadge.classList.remove('hot');
+  listenText.textContent = 'mic off';
+}
+muteBtn.onclick = () => {
+  micMuted = !micMuted;
+  muteBtn.classList.toggle('muted', micMuted);
+  listenText.textContent = micMuted ? 'muted' : (sessionActive ? 'listening' : 'mic off');
+};
+
+function resampleTo16k(input, inRate, outRate){
+  if(inRate === outRate) return input;
+  const ratio = inRate / outRate;
+  const outLength = Math.round(input.length / ratio);
+  const out = new Float32Array(outLength);
+  for(let i=0;i<outLength;i++){
+    out[i] = input[Math.min(input.length-1, Math.floor(i*ratio))];
+  }
+  return out;
+}
+function floatTo16BitPCM(float32){
+  const out = new Int16Array(float32.length);
+  for(let i=0;i<float32.length;i++){
+    let s = Math.max(-1, Math.min(1, float32[i]));
+    out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+  }
+  return out;
+}
+function arrayBufferToBase64(buf){
+  let binary = '';
+  const bytes = new Uint8Array(buf);
+  const chunk = 0x8000;
+  for(let i=0;i<bytes.length;i+=chunk){
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i+chunk));
+  }
+  return btoa(binary);
+}
+
+// ---- playback: PCM16 @24kHz from server ----
+function playAudioChunk(b64){
+  if(!playCtx){ playCtx = new (window.AudioContext || window.webkitAudioContext)(); nextPlayTime = playCtx.currentTime; }
+  const binary = atob(b64);
+  const len = binary.length;
+  const bytes = new Uint8Array(len);
+  for(let i=0;i<len;i++) bytes[i] = binary.charCodeAt(i);
+  const int16 = new Int16Array(bytes.buffer);
+  const float32 = new Float32Array(int16.length);
+  for(let i=0;i<int16.length;i++) float32[i] = int16[i] / 32768;
+
+  const buffer = playCtx.createBuffer(1, float32.length, 24000);
+  buffer.copyToChannel(float32, 0);
+  const src = playCtx.createBufferSource();
+  src.buffer = buffer;
+  src.connect(playCtx.destination);
+  const startAt = Math.max(playCtx.currentTime, nextPlayTime);
+  src.start(startAt);
+  nextPlayTime = startAt + buffer.duration;
+}
+
+// ---- video frame loop: send a JPEG frame every 1.5s ----
+function startFrameLoop(){
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  frameTimer = setInterval(() => {
+    if(!sessionActive || !ws || ws.readyState !== WebSocket.OPEN) return;
+    if(!video.videoWidth) return;
+    const maxW = 640;
+    const scale = Math.min(1, maxW / video.videoWidth);
+    canvas.width = video.videoWidth * scale;
+    canvas.height = video.videoHeight * scale;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+    const b64 = dataUrl.split(',')[1];
+    ws.send(JSON.stringify({
+      realtimeInput: { video: { data: b64, mimeType: 'image/jpeg' } }
+    }));
+  }, 1500);
+}
+function stopFrameLoop(){
+  if(frameTimer){ clearInterval(frameTimer); frameTimer = null; }
+}
+</script>
+</body>
+</html>
